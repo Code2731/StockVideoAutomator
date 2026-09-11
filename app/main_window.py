@@ -41,6 +41,7 @@ class MainWindow(QMainWindow):
         self._workers: Dict[str, Any] = {}
         self._download_queue: deque = deque()  # queued VideoInfo objects
         self._info_worker: Optional[Any] = None
+        self._info_queue: deque = deque()  # queued URLs for info fetching
         self._update_worker: Optional[Any] = None
         self._app_update_worker: Optional[Any] = None
         self._app_update_silent = False
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(50, self._restore_session)
         QTimer.singleShot(100, self._auto_check_ytdlp_update)
         QTimer.singleShot(150, self._auto_check_app_update)
+        QTimer.singleShot(200, self._check_dependencies)
 
     def _setup_menubar(self):
         menubar = self.menuBar()
@@ -265,6 +267,49 @@ class MainWindow(QMainWindow):
         self._bridge_server = BridgeServer(self, parent=self)
         self._bridge_server.start()
 
+    # ── Dependency check ────────────────────────────────────────
+
+    def _check_dependencies(self):
+        from app.utils.dependency_installer import (
+            find_ffmpeg, find_deno, add_tools_to_path,
+            DependencyInstaller,
+        )
+        add_tools_to_path()
+        need_ffmpeg = find_ffmpeg() is None
+        need_deno = find_deno() is None
+
+        if not need_ffmpeg and not need_deno:
+            return
+
+        names = []
+        if need_ffmpeg:
+            names.append("ffmpeg")
+        if need_deno:
+            names.append("deno")
+
+        reply = QMessageBox.question(
+            self, tr("dlg.dep_title"),
+            tr("dlg.dep_body", names=", ".join(names)),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._dep_installer = DependencyInstaller(
+            install_ffmpeg=need_ffmpeg,
+            install_deno=need_deno,
+        )
+        self._dep_installer.status.connect(self.status_bar.showMessage)
+        self._dep_installer.finished.connect(self._on_dep_install_finished)
+        self._dep_installer.start()
+
+    def _on_dep_install_finished(self, success: bool, msg: str):
+        if success:
+            self.status_bar.showMessage(msg, 5000)
+        else:
+            QMessageBox.warning(self, tr("dlg.dep_error_title"), msg)
+            self.status_bar.showMessage(tr("msg.dep_failed"), 5000)
+
     # ── Load history ───────────────────────────────────────────
 
     def _load_history(self):
@@ -342,11 +387,14 @@ class MainWindow(QMainWindow):
 
     def _fetch_info(self, url: str):
         if self._info_worker and self._info_worker.isRunning():
-            QMessageBox.information(
-                self, tr("dlg.notice"), tr("dlg.info_loading")
-            )
+            self._info_queue.append(url)
+            queued = len(self._info_queue)
+            self.status_bar.showMessage(tr("msg.info_queued", count=queued))
             return
 
+        self._start_info_worker(url)
+
+    def _start_info_worker(self, url: str):
         self.status_bar.showMessage(tr("msg.fetching_info"))
         from app.workers.info_worker import InfoWorker
         self._info_worker = InfoWorker(url)
@@ -354,6 +402,7 @@ class MainWindow(QMainWindow):
         self._info_worker.playlist_ready.connect(self._on_playlist_ready)
         self._info_worker.error.connect(self._on_info_error)
         self._info_worker.status_message.connect(self.status_bar.showMessage)
+        self._info_worker.finished.connect(self._on_info_worker_done)
         self._info_worker.start()
 
     def _collect_options(self) -> dict:
@@ -370,6 +419,12 @@ class MainWindow(QMainWindow):
             "codec": self.toolbar.codec,
             "format_selector": "",
         }
+
+    def _on_info_worker_done(self):
+        """대기 중인 URL이 있으면 다음 정보 조회를 시작한다."""
+        if self._info_queue:
+            next_url = self._info_queue.popleft()
+            self._start_info_worker(next_url)
 
     def _on_info_ready(self, video_info: VideoInfo):
         video_info.download_type = self.toolbar.download_type
@@ -930,5 +985,6 @@ class MainWindow(QMainWindow):
             if hasattr(worker, 'cancel'):
                 worker.cancel()
                 worker.wait(2000)
+        self.db.close()
         self.tray_icon.hide()
         event.accept()
