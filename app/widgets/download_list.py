@@ -1,19 +1,21 @@
 from typing import Dict, List, Optional
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QLabel, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PySide6.QtCore import Qt, Signal
 
 from app.models.video_info import VideoInfo
 from app.widgets.download_item import DownloadItemWidget
+from app.utils.i18n import tr
 
 
 class DownloadList(QWidget):
     """Scrollable list of download items."""
 
-    cancel_requested = pyqtSignal(str)
-    remove_requested = pyqtSignal(str)
-    count_changed = pyqtSignal(int)
+    cancel_requested = Signal(str)
+    remove_requested = Signal(str)
+    format_requested = Signal(str)
+    count_changed = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -39,12 +41,12 @@ class DownloadList(QWidget):
         self.container = QWidget()
         self.container.setObjectName("downloadContainer")
         self.container_layout = QVBoxLayout(self.container)
-        self.container_layout.setContentsMargins(0, 0, 0, 0)
-        self.container_layout.setSpacing(1)
+        self.container_layout.setContentsMargins(8, 8, 8, 8)
+        self.container_layout.setSpacing(8)
         self.container_layout.addStretch()
 
         # Empty placeholder
-        self.lbl_empty = QLabel("링크를 붙여넣어 다운로드를 시작하세요")
+        self.lbl_empty = QLabel(tr("msg.empty_list"))
         self.lbl_empty.setObjectName("emptyLabel")
         self.lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_empty.setSizePolicy(
@@ -73,6 +75,7 @@ class DownloadList(QWidget):
         widget = DownloadItemWidget(video_info)
         widget.cancel_requested.connect(self.cancel_requested.emit)
         widget.remove_requested.connect(self._remove_item)
+        widget.format_requested.connect(self.format_requested.emit)
         widget.clicked.connect(self._select_item)
 
         # Insert before the stretch
@@ -145,6 +148,12 @@ class DownloadList(QWidget):
             self.container_layout.removeWidget(w)
         for i, w in enumerate(widgets):
             self.container_layout.insertWidget(i, w)
+
+    def retranslate(self):
+        """언어 변경 시 목록의 정적 텍스트와 상태 배지를 갱신한다."""
+        self.lbl_empty.setText(tr("msg.empty_list"))
+        for widget in self._items.values():
+            widget._update_status_badge(widget.video_info.status)
 
     @property
     def item_count(self) -> int:

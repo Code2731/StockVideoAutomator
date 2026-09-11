@@ -37,3 +37,18 @@ nul
 # Temp
 *.tmp
 *.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Nuitka / build artifacts
+*.build/
+*.dist/
+*.onefile-build/
+*.app/
+nuitka-crash-report.xml
+StockVideoAutomator-macOS-*.zip
+build_log*.txt
+*.exp

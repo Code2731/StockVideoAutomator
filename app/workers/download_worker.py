@@ -2,18 +2,26 @@ import os
 import shutil
 import sys
 import time
-from PyQt6.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from app.models.video_info import VideoInfo
 from app.utils.settings_manager import SettingsManager
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class _DownloadPaused(Exception):
+    """진행 훅에서 일시정지를 요청할 때 사용하는 내부 예외."""
 
 
 class DownloadWorker(QThread):
     """Worker thread to download a video/audio using yt-dlp."""
 
-    progress = pyqtSignal(str, dict)  # video_id, progress_data
-    finished = pyqtSignal(str, str)   # video_id, file_path
-    error = pyqtSignal(str, str)      # video_id, error_message
+    progress = Signal(str, dict)  # video_id, progress_data
+    finished = Signal(str, str)   # video_id, file_path
+    error = Signal(str, str)      # video_id, error_message
+    paused = Signal(str)          # video_id, 일시정지됨 (partial 파일 유지)
 
     # 자막 언어 → yt-dlp 언어코드
     LANG_MAP = {
@@ -35,6 +43,7 @@ class DownloadWorker(QThread):
                  audio_track: str = "기본",
                  frame_rate: str = "최고",
                  codec: str = "H264",
+                 format_selector: str = "",
                  parent=None):
         super().__init__(parent)
         self.video_info = video_info
@@ -47,13 +56,20 @@ class DownloadWorker(QThread):
         self.audio_track = audio_track
         self.frame_rate = frame_rate
         self.codec = codec
+        self.format_selector = format_selector
         self._cancelled = False
+        self._paused = False
         self._downloaded_filepath = ""
         self._last_emit_time = 0.0
         self._settings = SettingsManager()
 
     def cancel(self):
+        """다운로드를 완전히 취소한다."""
         self._cancelled = True
+
+    def pause(self):
+        """다운로드를 일시정지한다. partial 파일은 남겨 재개에 사용한다."""
+        self._paused = True
 
     def run(self):
         import yt_dlp
@@ -76,13 +92,21 @@ class DownloadWorker(QThread):
             if self._cancelled:
                 self.error.emit(vid, "다운로드가 취소되었습니다.")
                 return
+            if self._paused:
+                self.paused.emit(vid)
+                return
 
             self.finished.emit(vid, self._downloaded_filepath)
 
+        except _DownloadPaused:
+            self.paused.emit(vid)
         except Exception as e:
             if self._cancelled:
                 self.error.emit(vid, "다운로드가 취소되었습니다.")
+            elif self._paused:
+                self.paused.emit(vid)
             else:
+                logger.exception("다운로드 실패: %s", self.video_info.url)
                 self.error.emit(vid, str(e))
 
     def _build_options(self) -> dict:
@@ -93,39 +117,28 @@ class DownloadWorker(QThread):
             "quiet": True,
             "no_warnings": True,
             "progress_hooks": [self._progress_hook],
+            # 일시정지 후 재개를 위해 partial 파일을 유지하고 이어받기를 활성화
+            "continuedl": True,
+            "nopart": False,
         }
 
-        # deno 경로 자동 추가 (yt-dlp JS 런타임)
-        deno_dir = os.path.join(os.path.expanduser("~"), ".deno", "bin")
-        if os.path.isdir(deno_dir) and deno_dir not in os.environ.get("PATH", ""):
-            os.environ["PATH"] = deno_dir + os.pathsep + os.environ.get("PATH", "")
+        # 앱 시작 시 설정한 ffmpeg 경로 가져오기
+        ffmpeg_location = os.environ.get("APP_FFMPEG_LOCATION")
+        if ffmpeg_location:
+            opts["ffmpeg_location"] = ffmpeg_location
 
-        # ffmpeg 경로 자동 탐색
-        ffmpeg_path = shutil.which("ffmpeg")
-        if not ffmpeg_path:
-            # 알려진 경로에서 찾기
-            candidates = [
-                os.path.join(os.path.dirname(sys.executable), "Scripts", "ffmpeg.exe"),
-                r"E:\Python\Scripts\ffmpeg.exe",
-                os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "ffmpeg", "ffmpeg.exe"),
-            ]
-            for candidate in candidates:
-                if os.path.isfile(candidate):
-                    ffmpeg_path = candidate
-                    break
-        if ffmpeg_path:
-            opts["ffmpeg_location"] = os.path.dirname(ffmpeg_path)
+        postprocessors = []
 
         if self.download_type == "audio":
-            opts["format"] = "bestaudio/best"
-            opts["postprocessors"] = [{
+            opts["format"] = self.format_selector or "bestaudio/best"
+            postprocessors.append({
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": self.fmt if self.fmt in ("mp3", "m4a", "wav", "flac") else "mp3",
                 "preferredquality": "192",
-            }]
+            })
         else:
-            fmt_str = self._get_format_string()
-            opts["format"] = fmt_str
+            # 사용자가 특정 형식을 선택했으면 그대로 사용
+            opts["format"] = self.format_selector or self._get_format_string()
             if self.fmt in ("mp4", "mkv", "webm"):
                 opts["merge_output_format"] = self.fmt
 
@@ -134,13 +147,25 @@ class DownloadWorker(QThread):
             opts["writeautomaticsub"] = True
             lang_code = self.LANG_MAP.get(self.subtitle_lang, "ko")
             opts["subtitleslangs"] = [lang_code]
+            # 자막을 범용 SRT 포맷으로 변환
+            postprocessors.append({
+                "key": "FFmpegSubtitlesConvertor",
+                "format": "srt",
+            })
+
+        # 메타데이터(제목/채널 등)를 파일에 태깅
+        postprocessors.append({
+            "key": "FFmpegMetadata",
+            "add_metadata": True,
+        })
 
         # 오디오 트랙: "모든 트랙"이면 모든 오디오 스트림 포함
         if self.audio_track == "모든 트랙" and self.download_type == "video":
             opts["format_sort"] = ["hasaud"]
-            opts["postprocessors"] = opts.get("postprocessors", []) + [{
-                "key": "FFmpegMerger",
-            }]
+            postprocessors.append({"key": "FFmpegMerger"})
+
+        if postprocessors:
+            opts["postprocessors"] = postprocessors
 
         # ── Settings from preferences ──
         s = self._settings
@@ -191,6 +216,8 @@ class DownloadWorker(QThread):
     def _progress_hook(self, d: dict):
         if self._cancelled:
             raise self._yt_dlp.utils.DownloadError("Cancelled")
+        if self._paused:
+            raise _DownloadPaused()
 
         vid = self.video_info.video_id
         if d["status"] == "downloading":
@@ -218,4 +245,3 @@ class DownloadWorker(QThread):
                 "progress": 100.0,
                 "status": "processing",
             })
-

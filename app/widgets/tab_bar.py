@@ -1,19 +1,33 @@
 from typing import Dict
-from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenu,
+from PySide6.QtWidgets import (
+    QWidget, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenu, QApplication
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QEvent, QTimer
-from PyQt6.QtGui import QAction
+from PySide6.QtCore import Signal, Qt, QEvent, QTimer
+from PySide6.QtGui import QAction
+
+from app.utils.i18n import tr
 
 
 class TabBar(QWidget):
     """Tab bar: 전체 / 동영상 / 오디오 / 재생 목록  +  search filter"""
 
-    tab_changed = pyqtSignal(str)
-    search_changed = pyqtSignal(str)  # emitted when filter text changes
-    sort_changed = pyqtSignal(str, bool)  # key, ascending
+    tab_changed = Signal(str)
+    search_changed = Signal(str)  # emitted when filter text changes
+    sort_changed = Signal(str, bool)  # key, ascending
 
     TABS = ["전체", "동영상", "오디오", "재생 목록"]
+    _TAB_I18N = {
+        "전체": "tab.all",
+        "동영상": "tab.video",
+        "오디오": "tab.audio",
+        "재생 목록": "tab.playlist",
+    }
+    _SORT_I18N = {
+        "added": "sort.added",
+        "name": "sort.name",
+        "size": "sort.size",
+        "status": "sort.status",
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -24,16 +38,17 @@ class TabBar(QWidget):
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 4, 12, 4)
+        layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(0)
+        self.setFixedHeight(50)
 
         for tab_name in self.TABS:
-            btn = QPushButton(tab_name)
+            btn = QPushButton(tr(self._TAB_I18N.get(tab_name, tab_name)))
             btn.setObjectName("tabButton")
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(32)
-            btn.setMinimumWidth(80)
+            btn.setMinimumHeight(50)
+            btn.setMinimumWidth(90)
             if tab_name == "전체":
                 btn.setChecked(True)
             btn.clicked.connect(lambda checked, name=tab_name: self._on_tab_click(name))
@@ -42,25 +57,25 @@ class TabBar(QWidget):
 
         layout.addStretch()
 
-        # Item count label (visible when search is hidden)
-        self.lbl_count = QLabel("0 아이템")
+        # Item count label
+        self._count = 0
+        self.lbl_count = QLabel(tr("tabbar.count", count=0))
         self.lbl_count.setObjectName("countLabel")
         layout.addWidget(self.lbl_count)
 
         # Search filter toggle button
         self.btn_search = QPushButton("🔍")
         self.btn_search.setObjectName("tabSearchButton")
-        self.btn_search.setFixedSize(32, 32)
+        self.btn_search.setFixedSize(36, 36)
         self.btn_search.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_search.setToolTip("필터 상자 표시")
         self.btn_search.clicked.connect(self._toggle_search)
         layout.addWidget(self.btn_search)
 
-        # Search input field (hidden by default)
+        # Search input field
         self.search_input = QLineEdit()
         self.search_input.setObjectName("tabSearchInput")
-        self.search_input.setPlaceholderText("다운로드한 항목 중에서 검색")
-        self.search_input.setFixedHeight(30)
+        self.search_input.setPlaceholderText(tr("tabbar.search_placeholder"))
+        self.search_input.setFixedHeight(32)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.setVisible(False)
         self.search_input.textChanged.connect(self._on_search_text_changed)
@@ -70,9 +85,8 @@ class TabBar(QWidget):
         # Sort button
         self.btn_sort = QPushButton("↕")
         self.btn_sort.setObjectName("tabSortButton")
-        self.btn_sort.setFixedSize(32, 32)
+        self.btn_sort.setFixedSize(36, 36)
         self.btn_sort.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_sort.setToolTip("정렬")
         self._build_sort_menu()
         layout.addWidget(self.btn_sort)
 
@@ -89,10 +103,10 @@ class TabBar(QWidget):
 
         if self._search_visible:
             self.search_input.setFocus()
-            self.btn_search.setToolTip("필터 상자 숨기기")
+            self.btn_search.setToolTip(tr("tabbar.filter_hide"))
         else:
             self.search_input.clear()
-            self.btn_search.setToolTip("필터 상자 표시")
+            self.btn_search.setToolTip(tr("tabbar.filter_show"))
 
     def eventFilter(self, obj, event):
         if obj is self.search_input and event.type() == QEvent.Type.FocusOut:
@@ -104,7 +118,6 @@ class TabBar(QWidget):
         """Close search bar if focus moved outside search-related widgets."""
         if not self._search_visible:
             return
-        from PyQt6.QtWidgets import QApplication
         focused = QApplication.focusWidget()
         # Keep open if focus is still on the input or the toggle button
         if focused is self.search_input or focused is self.btn_search:
@@ -118,7 +131,7 @@ class TabBar(QWidget):
         self.search_input.setVisible(False)
         self.lbl_count.setVisible(True)
         self.search_input.clear()
-        self.btn_search.setToolTip("필터 상자 표시")
+        self.btn_search.setToolTip(tr("tabbar.filter_show"))
 
     def _on_search_text_changed(self, text: str):
         self.search_changed.emit(text)
@@ -137,7 +150,7 @@ class TabBar(QWidget):
         ]
         self._sort_actions = []
         for label, key in sort_options:
-            act = QAction(label, self)
+            act = QAction(tr(self._SORT_I18N.get(key, label)), self)
             act.setCheckable(True)
             act.setChecked(key == "added")
             act.triggered.connect(lambda checked, k=key: self._on_sort_selected(k))
@@ -146,13 +159,13 @@ class TabBar(QWidget):
 
         menu.addSeparator()
 
-        self.act_asc = QAction("오름차순 ↑", self)
+        self.act_asc = QAction(tr("sort.asc"), self)
         self.act_asc.setCheckable(True)
         self.act_asc.setChecked(True)
         self.act_asc.triggered.connect(lambda: self._on_order_selected(True))
         menu.addAction(self.act_asc)
 
-        self.act_desc = QAction("내림차순 ↓", self)
+        self.act_desc = QAction(tr("sort.desc"), self)
         self.act_desc.setCheckable(True)
         self.act_desc.setChecked(False)
         self.act_desc.triggered.connect(lambda: self._on_order_selected(False))
@@ -173,7 +186,23 @@ class TabBar(QWidget):
         self.sort_changed.emit(self._sort_key, self._sort_ascending)
 
     def set_count(self, count: int):
-        self.lbl_count.setText(f"{count} 아이템")
+        self._count = count
+        self.lbl_count.setText(tr("tabbar.count", count=count))
+
+    def retranslate(self):
+        """언어 변경 시 탭/정렬 텍스트를 갱신한다."""
+        for key, btn in self._buttons.items():
+            btn.setText(tr(self._TAB_I18N.get(key, key)))
+        self.set_count(self._count)
+        self.search_input.setPlaceholderText(tr("tabbar.search_placeholder"))
+        self.btn_search.setToolTip(
+            tr("tabbar.filter_hide") if self._search_visible
+            else tr("tabbar.filter_show")
+        )
+        for act, key in self._sort_actions:
+            act.setText(tr(self._SORT_I18N.get(key, key)))
+        self.act_asc.setText(tr("sort.asc"))
+        self.act_desc.setText(tr("sort.desc"))
 
     @property
     def current_tab(self) -> str:

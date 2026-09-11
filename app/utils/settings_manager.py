@@ -2,7 +2,7 @@
 
 import os
 import sys
-from PyQt6.QtCore import QSettings
+from PySide6.QtCore import QSettings
 
 
 class SettingsManager:

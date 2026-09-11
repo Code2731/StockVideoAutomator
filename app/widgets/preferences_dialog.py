@@ -1,12 +1,12 @@
 """Preferences dialog – mirrors 4K Video Downloader+ settings UI."""
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QStackedWidget, QFrame, QLineEdit, QSpinBox,
     QCheckBox, QFileDialog, QSizePolicy, QApplication,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QEvent
-from PyQt6.QtGui import QFont
+from PySide6.QtCore import Qt, Signal, QSize, QEvent
+from PySide6.QtGui import QFont, QPainter, QColor, QPen
 
 from app.utils.settings_manager import SettingsManager
 
@@ -16,7 +16,7 @@ from app.utils.settings_manager import SettingsManager
 class ToggleSwitch(QWidget):
     """Custom iOS-style toggle switch matching 4K Video Downloader+ design."""
 
-    toggled = pyqtSignal(bool)
+    toggled = Signal(bool)
 
     def __init__(self, checked: bool = False, parent=None):
         super().__init__(parent)
@@ -38,7 +38,6 @@ class ToggleSwitch(QWidget):
         super().mousePressEvent(event)
 
     def paintEvent(self, event):
-        from PyQt6.QtGui import QPainter, QColor, QPen
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -74,7 +73,7 @@ class ToggleSwitch(QWidget):
 class SidebarItem(QWidget):
     """Single clickable sidebar menu entry."""
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, icon_text: str, label: str, parent=None):
         super().__init__(parent)
@@ -507,7 +506,7 @@ class AuthorizationPage(QWidget):
 class PreferencesDialog(QDialog):
     """Settings dialog with sidebar navigation."""
 
-    settings_changed = pyqtSignal()
+    settings_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -762,29 +761,10 @@ class PreferencesDialog(QDialog):
         self.settings_changed.emit()
 
     def _apply_autostart(self, enabled: bool):
-        """Register/unregister from Windows startup."""
-        import sys
-        if sys.platform != "win32":
-            return
-        try:
-            import winreg
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Run",
-                0, winreg.KEY_SET_VALUE,
-            )
-            app_name = "StockVideoAutomator"
-            if enabled:
-                exe_path = self._settings.get_auto_start_path()
-                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, f'"{exe_path}"')
-            else:
-                try:
-                    winreg.DeleteValue(key, app_name)
-                except FileNotFoundError:
-                    pass
-            winreg.CloseKey(key)
-        except Exception:
-            pass
+        """운영체제별 자동 시작을 등록/해제한다."""
+        from app.utils import autostart
+
+        autostart.set_enabled(enabled, self._settings.get_auto_start_path())
 
     def _save_advanced(self, *_):
         s = self._settings

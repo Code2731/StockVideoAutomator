@@ -1,30 +1,32 @@
 import os
 import sys
 from collections import deque
-from typing import Dict, Optional
-from PyQt6.QtWidgets import (
+from typing import Dict, Optional, Any
+from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QStatusBar, QApplication,
     QMessageBox, QInputDialog, QMenuBar, QMenu, QFileDialog,
-    QSystemTrayIcon,
+    QSystemTrayIcon, QDialog,
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QDesktopServices, QKeySequence, QIcon
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QIcon
 
 from app.widgets.toolbar import ToolBar
 from app.widgets.tab_bar import TabBar
 from app.widgets.download_list import DownloadList
 from app.widgets.download_item import DownloadItemWidget
-from app.widgets.control_panel import ControlPanel
 from app.models.video_info import VideoInfo
 from app.models.database import DownloadDatabase
+from app.models import session_state
 from app.utils.helpers import is_youtube_url, resource_path
 from app.utils.settings_manager import SettingsManager
+from app.utils.i18n import tr, get_language, set_language
+from app.version import RELEASES_PAGE, __version__
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Stock Video Automator")
+        self.setWindowTitle(tr("app.title"))
         self.setMinimumSize(900, 600)
         self.resize(1000, 650)
 
@@ -36,11 +38,14 @@ class MainWindow(QMainWindow):
 
         self._settings = SettingsManager()
         self.db = DownloadDatabase()
-        self._workers: Dict[str, DownloadWorker] = {}
+        self._workers: Dict[str, Any] = {}
         self._download_queue: deque = deque()  # queued VideoInfo objects
-        self._info_worker: Optional[InfoWorker] = None
-        self._update_worker: Optional[YtDlpUpdateWorker] = None
+        self._info_worker: Optional[Any] = None
+        self._update_worker: Optional[Any] = None
+        self._app_update_worker: Optional[Any] = None
+        self._app_update_silent = False
         self._force_quit = False
+        self._downloads_paused = False
 
         self._setup_menubar()
         self._setup_ui()
@@ -51,129 +56,86 @@ class MainWindow(QMainWindow):
 
         # 창 표시 후 무거운 작업 지연 실행
         QTimer.singleShot(0, self._load_history)
+        QTimer.singleShot(50, self._restore_session)
         QTimer.singleShot(100, self._auto_check_ytdlp_update)
+        QTimer.singleShot(150, self._auto_check_app_update)
 
     def _setup_menubar(self):
         menubar = self.menuBar()
+        self._menu_actions = []  # [(action, i18n_key)]
+        self._menus = {}         # i18n_key -> QMenu
+
+        def add_menu(title_key: str, parent_menu=None) -> QMenu:
+            if parent_menu is None:
+                menu = menubar.addMenu(tr(title_key))
+            else:
+                menu = QMenu(tr(title_key), self)
+                parent_menu.addMenu(menu)
+            self._menus[title_key] = menu
+            return menu
+
+        def add_action(menu, key: str, slot, shortcut=None, enabled=True):
+            act = QAction(tr(key), self)
+            if shortcut:
+                act.setShortcut(QKeySequence(shortcut))
+            act.setEnabled(enabled)
+            act.triggered.connect(slot)
+            menu.addAction(act)
+            self._menu_actions.append((act, key))
+            return act
 
         # 파일 메뉴
-        file_menu = menubar.addMenu("파일")
-
-        act_paste = QAction("링크 붙여넣기", self)
-        act_paste.triggered.connect(self._on_paste)
-        file_menu.addAction(act_paste)
-
+        file_menu = add_menu("menu.file")
+        add_action(file_menu, "action.paste_link", self._on_paste)
         file_menu.addSeparator()
-
-        act_save_path = QAction("저장 폴더 변경...", self)
-        act_save_path.triggered.connect(self._change_save_path)
-        file_menu.addAction(act_save_path)
-
-        act_open_folder = QAction("저장 폴더 열기", self)
-        act_open_folder.triggered.connect(self._open_save_folder)
-        file_menu.addAction(act_open_folder)
-
+        add_action(file_menu, "action.change_save_path", self._change_save_path)
+        add_action(file_menu, "action.open_save_folder", self._open_save_folder)
         file_menu.addSeparator()
-
-        act_exit = QAction("종료", self)
-        act_exit.setShortcut(QKeySequence("Alt+F4"))
-        act_exit.triggered.connect(self.close)
-        file_menu.addAction(act_exit)
+        add_action(file_menu, "action.exit", self.close, shortcut="Alt+F4")
 
         # 수정 메뉴
-        edit_menu = menubar.addMenu("수정")
-
-        act_paste2 = QAction("링크 붙여넣기...", self)
-        act_paste2.setShortcut(QKeySequence("Ctrl+V"))
-        act_paste2.triggered.connect(self._on_paste)
-        edit_menu.addAction(act_paste2)
-
+        edit_menu = add_menu("menu.edit")
+        add_action(edit_menu, "action.paste_link_ellipsis", self._on_paste,
+                   shortcut="Ctrl+V")
         edit_menu.addSeparator()
 
-        # "나중에 볼" 다운로드 서브메뉴
-        watch_later_menu = QMenu('"나중에 볼" 다운로드', self)
-        act_wl_download = QAction("재생목록 다운로드", self)
-        act_wl_download.triggered.connect(lambda: self._download_playlist_type("watch_later"))
-        watch_later_menu.addAction(act_wl_download)
-        act_wl_subscribe = QAction("재생 목록 구독", self)
-        act_wl_subscribe.triggered.connect(lambda: self._subscribe_playlist("watch_later"))
-        watch_later_menu.addAction(act_wl_subscribe)
-        edit_menu.addMenu(watch_later_menu)
+        watch_later_menu = add_menu("menu.watch_later", edit_menu)
+        add_action(watch_later_menu, "action.playlist_download",
+                   lambda: self._download_playlist_type("watch_later"))
+        add_action(watch_later_menu, "action.playlist_subscribe",
+                   lambda: self._subscribe_playlist("watch_later"), enabled=False)
 
-        # "좋아요 표시" 다운로드 서브메뉴
-        liked_menu = QMenu('"좋아요 표시" 다운로드', self)
-        act_liked_download = QAction("재생목록 다운로드", self)
-        act_liked_download.triggered.connect(lambda: self._download_playlist_type("liked"))
-        liked_menu.addAction(act_liked_download)
-        act_liked_subscribe = QAction("재생 목록 구독", self)
-        act_liked_subscribe.triggered.connect(lambda: self._subscribe_playlist("liked"))
-        liked_menu.addAction(act_liked_subscribe)
-        edit_menu.addMenu(liked_menu)
+        liked_menu = add_menu("menu.liked", edit_menu)
+        add_action(liked_menu, "action.playlist_download",
+                   lambda: self._download_playlist_type("liked"))
+        add_action(liked_menu, "action.playlist_subscribe",
+                   lambda: self._subscribe_playlist("liked"), enabled=False)
 
         edit_menu.addSeparator()
-
-        act_pause_all = QAction("모두 일시정지", self)
-        act_pause_all.triggered.connect(self._pause_all)
-        edit_menu.addAction(act_pause_all)
-
-        act_resume_all = QAction("모두 재시작", self)
-        act_resume_all.triggered.connect(self._resume_all)
-        edit_menu.addAction(act_resume_all)
-
-        act_remove_all = QAction("모두 제거", self)
-        act_remove_all.triggered.connect(self._remove_all)
-        edit_menu.addAction(act_remove_all)
+        add_action(edit_menu, "action.pause_all", self._pause_all)
+        add_action(edit_menu, "action.resume_all", self._resume_all)
+        add_action(edit_menu, "action.remove_all", self._remove_all)
 
         # 보기 메뉴
-        view_menu = menubar.addMenu("보기")
-
-        act_all = QAction("전체", self)
-        act_all.triggered.connect(lambda: self.tab_bar._on_tab_click("전체"))
-        view_menu.addAction(act_all)
-
-        act_video = QAction("동영상", self)
-        act_video.triggered.connect(lambda: self.tab_bar._on_tab_click("동영상"))
-        view_menu.addAction(act_video)
-
-        act_audio = QAction("오디오", self)
-        act_audio.triggered.connect(lambda: self.tab_bar._on_tab_click("오디오"))
-        view_menu.addAction(act_audio)
-
-        act_playlist = QAction("재생 목록", self)
-        act_playlist.triggered.connect(lambda: self.tab_bar._on_tab_click("재생 목록"))
-        view_menu.addAction(act_playlist)
+        view_menu = add_menu("menu.view")
+        add_action(view_menu, "tab.all", lambda: self.tab_bar._on_tab_click("전체"))
+        add_action(view_menu, "tab.video", lambda: self.tab_bar._on_tab_click("동영상"))
+        add_action(view_menu, "tab.audio", lambda: self.tab_bar._on_tab_click("오디오"))
+        add_action(view_menu, "tab.playlist",
+                   lambda: self.tab_bar._on_tab_click("재생 목록"))
 
         # 도구 메뉴
-        tools_menu = menubar.addMenu("도구")
-
-        act_control_panel = QAction("제어판...", self)
-        act_control_panel.triggered.connect(self._show_control_panel)
-        tools_menu.addAction(act_control_panel)
-
-        act_preferences = QAction("환경설정...", self)
-        act_preferences.triggered.connect(self._show_preferences)
-        tools_menu.addAction(act_preferences)
-
-        act_license = QAction("라이센스 관리하기...", self)
-        act_license.triggered.connect(self._show_license)
-        tools_menu.addAction(act_license)
-
-        act_update = QAction("업데이트 확인...", self)
-        act_update.triggered.connect(self._check_update)
-        tools_menu.addAction(act_update)
-
+        tools_menu = add_menu("menu.tools")
+        add_action(tools_menu, "action.control_panel", self._show_control_panel)
+        add_action(tools_menu, "action.preferences", self._show_preferences)
+        add_action(tools_menu, "action.license", self._show_license, enabled=False)
+        add_action(tools_menu, "action.check_update", self._check_update)
         tools_menu.addSeparator()
-
-        act_ytdlp_update = QAction("yt-dlp 업데이트", self)
-        act_ytdlp_update.triggered.connect(self._update_ytdlp)
-        tools_menu.addAction(act_ytdlp_update)
+        add_action(tools_menu, "action.ytdlp_update", self._update_ytdlp)
 
         # 도움말 메뉴
-        help_menu = menubar.addMenu("도움말")
-
-        act_about = QAction("Stock Video Automator 정보", self)
-        act_about.triggered.connect(self._show_about)
-        help_menu.addAction(act_about)
+        help_menu = add_menu("menu.help")
+        add_action(help_menu, "action.about", self._show_about)
 
     def _setup_ui(self):
         central = QWidget()
@@ -198,13 +160,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.download_list, stretch=1)
 
         # Control panel (overlay, right-side)
+        from app.widgets.control_panel import ControlPanel
         self.control_panel = ControlPanel(central)
         self.control_panel.setVisible(False)
 
         # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("준비")
+        self.status_bar.showMessage(tr("msg.ready"))
 
     def _setup_tray(self):
         """Initialize system tray icon with context menu."""
@@ -218,15 +181,18 @@ class MainWindow(QMainWindow):
         self.tray_icon.setToolTip("Stock Video Automator")
 
         tray_menu = QMenu(self)
-        act_show = QAction("열기", self)
+        self._tray_actions = []
+        act_show = QAction(tr("tray.open"), self)
         act_show.triggered.connect(self._tray_show)
         tray_menu.addAction(act_show)
+        self._tray_actions.append((act_show, "tray.open"))
 
         tray_menu.addSeparator()
 
-        act_quit = QAction("종료", self)
+        act_quit = QAction(tr("tray.exit"), self)
         act_quit.triggered.connect(self._tray_quit)
         tray_menu.addAction(act_quit)
+        self._tray_actions.append((act_quit, "tray.exit"))
 
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.activated.connect(self._on_tray_activated)
@@ -251,6 +217,7 @@ class MainWindow(QMainWindow):
         self.tab_bar.tab_changed.connect(self._on_tab_changed)
         self.download_list.count_changed.connect(self.tab_bar.set_count)
         self.download_list.cancel_requested.connect(self._cancel_download)
+        self.download_list.format_requested.connect(self._on_format_requested)
 
         # Control panel signals
         self.control_panel.preferences_requested.connect(self._show_preferences)
@@ -275,6 +242,21 @@ class MainWindow(QMainWindow):
         if os.path.exists(qss_path):
             with open(qss_path, "r", encoding="utf-8") as f:
                 self.setStyleSheet(f.read())
+
+    def _retranslate_ui(self):
+        """언어 변경 시 메뉴/툴바/탭바/제어판 텍스트를 갱신한다."""
+        self.setWindowTitle(tr("app.title"))
+        for key, menu in self._menus.items():
+            menu.setTitle(tr(key))
+        for act, key in self._menu_actions:
+            act.setText(tr(key))
+        for act, key in getattr(self, "_tray_actions", []):
+            act.setText(tr(key))
+        self.toolbar.retranslate()
+        self.tab_bar.retranslate()
+        self.control_panel.retranslate()
+        self.download_list.retranslate()
+        self.status_bar.showMessage(tr("msg.ready"))
 
     # ── MCP Bridge Server ─────────────────────────────────────
 
@@ -307,7 +289,37 @@ class MainWindow(QMainWindow):
 
         count = len(records)
         if count > 0:
-            self.status_bar.showMessage(f"이전 다운로드 {count}개 로드됨")
+            self.status_bar.showMessage(tr("msg.loaded_history", count=count))
+
+    # ── Session persistence (앱 재시작 후 이어받기) ──────────
+
+    def _restore_session(self):
+        """이전 실행에서 완료되지 않은 다운로드를 일시정지 상태로 복원한다."""
+        try:
+            items = session_state.load()
+        except Exception:
+            return
+        if not items:
+            return
+
+        for vi in items:
+            vi.status = "paused"
+            widget = self.download_list.add_item(vi)
+            if widget:
+                widget._update_status_badge("paused")
+
+        self.status_bar.showMessage(tr("msg.restored", count=len(items)))
+
+    _ACTIVE_STATUSES = {"downloading", "paused", "waiting", "pending"}
+
+    def _persist_active_downloads(self):
+        """진행 중/대기 중/일시정지된 다운로드 목록을 디스크에 저장한다."""
+        items = [
+            item.video_info
+            for item in self.download_list.get_all_items()
+            if item.video_info.status in self._ACTIVE_STATUSES
+        ]
+        session_state.save(items)
 
     # ── Paste / URL handling ─────────────────────────────────
 
@@ -317,23 +329,25 @@ class MainWindow(QMainWindow):
 
         if not url or not is_youtube_url(url):
             url, ok = QInputDialog.getText(
-                self, "URL 입력", "YouTube URL을 입력하세요:",
+                self, tr("dlg.url_input"), tr("dlg.url_prompt"),
                 text=url,
             )
             if not ok or not url:
                 return
             if not is_youtube_url(url):
-                QMessageBox.warning(self, "오류", "올바른 YouTube URL이 아닙니다.")
+                QMessageBox.warning(self, tr("dlg.error"), tr("dlg.invalid_url"))
                 return
 
         self._fetch_info(url)
 
     def _fetch_info(self, url: str):
         if self._info_worker and self._info_worker.isRunning():
-            QMessageBox.information(self, "알림", "이미 정보를 가져오는 중입니다.")
+            QMessageBox.information(
+                self, tr("dlg.notice"), tr("dlg.info_loading")
+            )
             return
 
-        self.status_bar.showMessage("영상 정보를 가져오는 중...")
+        self.status_bar.showMessage(tr("msg.fetching_info"))
         from app.workers.info_worker import InfoWorker
         self._info_worker = InfoWorker(url)
         self._info_worker.info_ready.connect(self._on_info_ready)
@@ -342,27 +356,44 @@ class MainWindow(QMainWindow):
         self._info_worker.status_message.connect(self.status_bar.showMessage)
         self._info_worker.start()
 
+    def _collect_options(self) -> dict:
+        """현재 툴바 설정을 DownloadWorker 인자 형태로 수집한다."""
+        return {
+            "save_dir": self.toolbar.save_path,
+            "download_type": self.toolbar.download_type,
+            "quality": self.toolbar.quality,
+            "fmt": self.toolbar.format,
+            "subtitle": self.toolbar.subtitle_enabled,
+            "subtitle_lang": self.toolbar.subtitle_lang,
+            "audio_track": self.toolbar.audio_track,
+            "frame_rate": self.toolbar.frame_rate,
+            "codec": self.toolbar.codec,
+            "format_selector": "",
+        }
+
     def _on_info_ready(self, video_info: VideoInfo):
         video_info.download_type = self.toolbar.download_type
         video_info.selected_quality = self.toolbar.quality
         video_info.ext = self.toolbar.format
+        video_info.options = self._collect_options()
 
-        widget = self.download_list.add_item(video_info)
+        self.download_list.add_item(video_info)
         self._start_download(video_info)
-        self.status_bar.showMessage("다운로드 시작...")
+        self.status_bar.showMessage(tr("msg.download_start"))
 
     def _on_playlist_ready(self, videos: list):
-        self.status_bar.showMessage(f"재생목록: {len(videos)}개 영상 발견")
+        self.status_bar.showMessage(tr("msg.playlist_found", count=len(videos)))
         for vi in videos:
             vi.download_type = self.toolbar.download_type
             vi.selected_quality = self.toolbar.quality
             vi.ext = self.toolbar.format
+            vi.options = self._collect_options()
             self.download_list.add_item(vi)
             self._start_download(vi)
 
     def _on_info_error(self, msg: str):
-        self.status_bar.showMessage("오류 발생")
-        QMessageBox.warning(self, "오류", msg)
+        self.status_bar.showMessage(tr("msg.error_occurred"))
+        QMessageBox.warning(self, tr("dlg.error"), msg)
 
     # ── Download management ──────────────────────────────────
 
@@ -373,33 +404,29 @@ class MainWindow(QMainWindow):
             self._download_queue.append(video_info)
             widget = self.download_list.get_item(video_info.video_id)
             if widget:
-                widget.lbl_status.setText("대기중")
+                widget._update_status_badge("waiting")
+            self._persist_active_downloads()
             return
 
         self._launch_worker(video_info)
 
     def _launch_worker(self, video_info: VideoInfo):
         from app.workers.download_worker import DownloadWorker
-        worker = DownloadWorker(
-            video_info=video_info,
-            save_dir=self.toolbar.save_path,
-            download_type=self.toolbar.download_type,
-            quality=self.toolbar.quality,
-            fmt=self.toolbar.format,
-            subtitle=self.toolbar.subtitle_enabled,
-            subtitle_lang=self.toolbar.subtitle_lang,
-            audio_track=self.toolbar.audio_track,
-            frame_rate=self.toolbar.frame_rate,
-            codec=self.toolbar.codec,
-        )
+        # 저장된 옵션이 일부만 있어도 기본값으로 채워 항상 완전한 옵션을 구성한다
+        options = {**self._collect_options(), **(video_info.options or {})}
+        worker = DownloadWorker(video_info=video_info, **options)
         worker.progress.connect(self._on_download_progress)
         worker.finished.connect(self._on_download_finished)
         worker.error.connect(self._on_download_error)
+        worker.paused.connect(self._on_download_paused)
         self._workers[video_info.video_id] = worker
         worker.start()
+        self._persist_active_downloads()
 
     def _process_queue(self):
         """Start queued downloads if slots are available."""
+        if self._downloads_paused:
+            return
         max_concurrent = self._settings.concurrent_downloads
         while self._download_queue and len(self._workers) < max_concurrent:
             vi = self._download_queue.popleft()
@@ -431,24 +458,25 @@ class MainWindow(QMainWindow):
 
         self._workers.pop(video_id, None)
         self._process_queue()
+        self._persist_active_downloads()
 
         active = len(self._workers)
         queued = len(self._download_queue)
         if active > 0:
-            msg = f"다운로드 중... ({active}개 진행"
+            msg = tr("msg.downloading_progress", active=active)
             if queued > 0:
-                msg += f", {queued}개 대기"
+                msg += tr("msg.queued", queued=queued)
             msg += ")"
             self.status_bar.showMessage(msg)
         else:
-            self.status_bar.showMessage("모든 다운로드 완료")
+            self.status_bar.showMessage(tr("msg.all_complete"))
 
         # Notifications
         title = widget.video_info.title if widget else video_id
         if self._settings.notify_download_complete:
             if self._settings.notify_tray and self.tray_icon.isVisible():
                 self.tray_icon.showMessage(
-                    "다운로드 완료", title,
+                    tr("notify.complete"), title,
                     QSystemTrayIcon.MessageIcon.Information, 3000,
                 )
             if self._settings.notify_sound:
@@ -456,7 +484,7 @@ class MainWindow(QMainWindow):
 
         if widget:
             self.control_panel.update_notification(
-                "다운로드 완료", widget.video_info.title
+                tr("notify.complete"), widget.video_info.title
             )
 
         self._reapply_sort()
@@ -467,23 +495,41 @@ class MainWindow(QMainWindow):
             widget.set_error(msg)
         self._workers.pop(video_id, None)
         self._process_queue()
+        self._persist_active_downloads()
         self._reapply_sort()
-        self.status_bar.showMessage(f"오류: {msg}")
+        self.status_bar.showMessage(tr("msg.error", message=msg))
 
         # Error notification
         if self._settings.notify_download_error:
             title = widget.video_info.title if widget else video_id
             if self._settings.notify_tray and self.tray_icon.isVisible():
                 self.tray_icon.showMessage(
-                    "다운로드 오류", f"{title}\n{msg}",
+                    tr("notify.error"), f"{title}\n{msg}",
                     QSystemTrayIcon.MessageIcon.Warning, 5000,
                 )
 
+    def _on_download_paused(self, video_id: str):
+        widget = self.download_list.get_item(video_id)
+        if widget:
+            widget.video_info.status = "paused"
+            widget._update_status_badge("paused")
+        self._workers.pop(video_id, None)
+        self._process_queue()
+        self._persist_active_downloads()
+        self._reapply_sort()
+        self.status_bar.showMessage(tr("msg.download_paused"))
+
     def _play_notification_sound(self):
-        """Play system notification sound."""
+        """운영체제 공통 알림음을 재생한다."""
+        if sys.platform == "win32":
+            try:
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                return
+            except Exception:
+                pass
         try:
-            import winsound
-            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            QApplication.beep()
         except Exception:
             pass
 
@@ -491,6 +537,41 @@ class MainWindow(QMainWindow):
         worker = self._workers.get(video_id)
         if worker:
             worker.cancel()
+
+    def _on_format_requested(self, video_id: str):
+        widget = self.download_list.get_item(video_id)
+        if not widget:
+            return
+        vi = widget.video_info
+
+        if vi.status == "downloading":
+            QMessageBox.information(
+                self, tr("dlg.notice"), tr("dlg.downloading_no_change")
+            )
+            return
+        if not vi.formats:
+            QMessageBox.information(
+                self, tr("dlg.format_title"), tr("dlg.format_no_info")
+            )
+            return
+
+        from app.widgets.format_dialog import FormatDialog
+        dlg = FormatDialog(vi, self.toolbar.download_type, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        selector = dlg.selected_selector()
+        vi.options = {**self._collect_options(), **(vi.options or {})}
+        vi.options["format_selector"] = selector
+        if selector:
+            self.status_bar.showMessage(
+                tr("msg.format_download", label=dlg.selected_label())
+            )
+        else:
+            self.status_bar.showMessage(tr("msg.current_settings_download"))
+        vi.status = "pending"
+        widget._update_status_badge("waiting")
+        self._start_download(vi)
 
     # ── Tab / Search filtering ──────────────────────────────
 
@@ -538,18 +619,21 @@ class MainWindow(QMainWindow):
 
     def _change_save_path(self):
         path = QFileDialog.getExistingDirectory(
-            self, "저장 폴더 선택", self.toolbar.save_path
+            self, tr("dlg.choose_folder"), self.toolbar.save_path
         )
         if path:
             self.toolbar._save_path = path
             display = self.toolbar._get_display_path()
-            self.toolbar.btn_save_path.setText(f"{display}  ▾")
+            self.toolbar.btn_save_path.setText(f"📂 {display}  ▾")
             self.toolbar.save_path_changed.emit(path)
 
     def _open_save_folder(self):
         path = self.toolbar.save_path
         if os.path.isdir(path):
-            os.startfile(path)
+            if sys.platform == "win32":
+                os.startfile(path)
+            else:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _clear_list(self):
         for item in list(self.download_list.get_all_items()):
@@ -558,45 +642,57 @@ class MainWindow(QMainWindow):
 
     def _clear_history(self):
         reply = QMessageBox.question(
-            self, "확인", "모든 다운로드 이력을 삭제하시겠습니까?",
+            self, tr("dlg.confirm"), tr("dlg.clear_history"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.db.clear_all()
             self._clear_list()
-            self.status_bar.showMessage("이력이 삭제되었습니다")
+            self.status_bar.showMessage(tr("msg.history_cleared"))
 
     def _pause_all(self):
+        self._downloads_paused = True
         paused = 0
-        for vid, worker in self._workers.items():
-            if not worker._cancelled:
-                worker.cancel()
-                widget = self.download_list.get_item(vid)
-                if widget:
-                    widget.lbl_status.setText("일시정지")
-                    widget.video_info.status = "paused"
-                paused += 1
+
+        # 진행 중인 다운로드는 partial 파일을 남기고 일시정지
+        for vid, worker in list(self._workers.items()):
+            worker.pause()
+            paused += 1
+
+        # 대기 중인 항목도 일시정지 상태로 전환하고 큐를 비운다
+        while self._download_queue:
+            vi = self._download_queue.popleft()
+            widget = self.download_list.get_item(vi.video_id)
+            if widget:
+                widget.video_info.status = "paused"
+                widget._update_status_badge("paused")
+            paused += 1
+
+        self._persist_active_downloads()
         if paused > 0:
-            self.status_bar.showMessage(f"{paused}개 다운로드 일시정지됨")
+            self.status_bar.showMessage(tr("msg.paused_count", count=paused))
         else:
-            self.status_bar.showMessage("일시정지할 다운로드가 없습니다")
+            self.status_bar.showMessage(tr("msg.nothing_to_pause"))
 
     def _resume_all(self):
+        self._downloads_paused = False
         resumed = 0
         for item in self.download_list.get_all_items():
             if item.video_info.status == "paused":
                 item.video_info.status = "downloading"
-                item.lbl_status.setText("대기중")
+                item._update_status_badge("waiting")
                 self._start_download(item.video_info)
                 resumed += 1
+        self._process_queue()
+        self._persist_active_downloads()
         if resumed > 0:
-            self.status_bar.showMessage(f"{resumed}개 다운로드 재시작")
+            self.status_bar.showMessage(tr("msg.resumed_count", count=resumed))
         else:
-            self.status_bar.showMessage("재시작할 다운로드가 없습니다")
+            self.status_bar.showMessage(tr("msg.nothing_to_resume"))
 
     def _remove_all(self):
         reply = QMessageBox.question(
-            self, "확인", "모든 항목을 제거하시겠습니까?",
+            self, tr("dlg.confirm"), tr("dlg.remove_all_confirm"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
@@ -604,31 +700,41 @@ class MainWindow(QMainWindow):
             for worker in list(self._workers.values()):
                 worker.cancel()
             self._workers.clear()
+            self._download_queue.clear()
+            self._downloads_paused = False
 
             for item in list(self.download_list.get_all_items()):
                 self.download_list._remove_item(item.video_info.video_id)
-            self.status_bar.showMessage("모든 항목이 제거되었습니다")
+            self._persist_active_downloads()
+            self.status_bar.showMessage(tr("msg.removed_all"))
+
+    def _has_cookies(self) -> bool:
+        return bool(self._settings.get_cookie_browser_name())
 
     def _download_playlist_type(self, playlist_type: str):
         if playlist_type == "watch_later":
-            label = "나중에 볼 동영상"
+            label, url = tr("dlg.watch_later_label"), ":ytwatchlater"
         else:
-            label = "좋아요 표시한 동영상"
-        QMessageBox.information(
-            self, "알림",
-            f'"{label}" 재생목록 다운로드는 YouTube 로그인이 필요합니다.\n'
-            "현재 버전에서는 지원되지 않습니다."
-        )
+            label, url = tr("dlg.liked_label"), ":ytfav"
+
+        if not self._has_cookies():
+            QMessageBox.information(
+                self, tr("dlg.login_required"),
+                tr("dlg.login_body", label=label),
+            )
+            return
+
+        self.status_bar.showMessage(tr("msg.loading_playlist", label=label))
+        self._fetch_info(url)
 
     def _subscribe_playlist(self, playlist_type: str):
         if playlist_type == "watch_later":
-            label = "나중에 볼 동영상"
+            label = tr("dlg.watch_later_label")
         else:
-            label = "좋아요 표시한 동영상"
+            label = tr("dlg.liked_label")
         QMessageBox.information(
-            self, "알림",
-            f'"{label}" 재생 목록 구독은 YouTube 로그인이 필요합니다.\n'
-            "현재 버전에서는 지원되지 않습니다."
+            self, tr("dlg.notice"),
+            tr("dlg.subscribe_body", label=label),
         )
 
     def _show_control_panel(self):
@@ -636,34 +742,44 @@ class MainWindow(QMainWindow):
 
     def _on_youtube_login(self):
         QMessageBox.information(
-            self, "YouTube 로그인",
-            "YouTube 로그인 기능은 현재 버전에서 지원되지 않습니다."
+            self, tr("dlg.youtube_login_title"),
+            tr("dlg.youtube_login_body"),
         )
+        self._open_preferences(4)
 
     def _show_support(self):
         QMessageBox.information(
-            self, "지원",
-            "지원 기능은 현재 버전에서 지원되지 않습니다."
+            self, tr("dlg.support_title"), tr("dlg.support_body")
         )
 
     def _show_preferences(self):
+        self._open_preferences(0)
+
+    def _open_preferences(self, page_index: int = 0):
         from app.widgets.preferences_dialog import PreferencesDialog
         dlg = PreferencesDialog(self)
         dlg.page_advanced.edit_path.setText(self.toolbar.save_path)
         dlg.settings_changed.connect(self._on_settings_changed)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        if page_index:
+            dlg._select_page(page_index)
         dlg.show()
 
     def _on_settings_changed(self):
         """React to preference changes."""
         s = self._settings
 
+        # 언어 변경 반영
+        if s.language != get_language():
+            set_language(s.language)
+            self._retranslate_ui()
+
         # Sync save path from settings to toolbar
         save_path = s.default_save_path
         if save_path and save_path != self.toolbar.save_path:
             self.toolbar._save_path = save_path
             display = self.toolbar._get_display_path()
-            self.toolbar.btn_save_path.setText(f"{display}  ▾")
+            self.toolbar.btn_save_path.setText(f"📂 {display}  ▾")
 
         # Show/hide tray icon based on background setting
         if s.run_in_background:
@@ -673,21 +789,64 @@ class MainWindow(QMainWindow):
 
     def _show_license(self):
         QMessageBox.information(
-            self, "라이센스",
-            "라이센스 관리 기능은 현재 버전에서 지원되지 않습니다."
+            self, tr("dlg.license_title"), tr("dlg.license_body")
         )
 
     def _check_update(self):
-        import yt_dlp
-        version = getattr(yt_dlp, "version", None)
-        ver_str = getattr(version, "__version__", "알 수 없음") if version else "알 수 없음"
-        QMessageBox.information(
-            self, "업데이트 확인",
-            f"Stock Video Automator v1.0\n"
-            f"yt-dlp 버전: {ver_str}\n\n"
-            "도구 > yt-dlp 업데이트 메뉴에서\n"
-            "yt-dlp를 최신 버전으로 업데이트할 수 있습니다."
-        )
+        if self._app_update_worker and self._app_update_worker.isRunning():
+            QMessageBox.information(
+                self, tr("dlg.notice"), tr("dlg.already_checking")
+            )
+            return
+        self._run_app_update_check(silent=False)
+
+    def _auto_check_app_update(self):
+        """설정이 켜져 있으면 시작 시 조용히 앱 업데이트를 확인한다."""
+        if self._settings.auto_update:
+            self._run_app_update_check(silent=True)
+
+    def _run_app_update_check(self, silent: bool = False):
+        from app.workers.app_update_worker import AppUpdateWorker
+        self._app_update_silent = silent
+        self._app_update_worker = AppUpdateWorker()
+        self._app_update_worker.finished.connect(self._on_app_update_result)
+        if not silent:
+            self.status_bar.showMessage(tr("msg.update_checking"))
+        self._app_update_worker.start()
+
+    def _on_app_update_result(self, success: bool, info: dict):
+        silent = self._app_update_silent
+        if not success:
+            if not silent:
+                QMessageBox.warning(
+                    self, tr("dlg.update_check_fail"),
+                    info.get("error", tr("dlg.unknown_error")),
+                )
+                self.status_bar.showMessage(tr("msg.ready"))
+            return
+
+        if info.get("update_available"):
+            latest = info.get("latest_version", "")
+            reply = QMessageBox.question(
+                self, tr("dlg.update_available_title"),
+                tr("dlg.update_available_body",
+                   latest=latest,
+                   current=info.get("current_version", "")),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                QDesktopServices.openUrl(
+                    QUrl(info.get("html_url") or RELEASES_PAGE)
+                )
+            self.status_bar.showMessage(
+                tr("msg.update_available", version=latest), 5000
+            )
+        elif not silent:
+            QMessageBox.information(
+                self, tr("dlg.latest_title"),
+                tr("dlg.latest_body", version=info.get("current_version", "")),
+            )
+            self.status_bar.showMessage(tr("msg.ready"))
 
     # ── yt-dlp update ────────────────────────────────────────
 
@@ -699,7 +858,7 @@ class MainWindow(QMainWindow):
         """사용자가 수동으로 yt-dlp 업데이트 실행."""
         if self._update_worker and self._update_worker.isRunning():
             QMessageBox.information(
-                self, "알림", "이미 업데이트가 진행 중입니다."
+                self, tr("dlg.notice"), tr("dlg.already_updating")
             )
             return
         self._run_ytdlp_update(silent=False)
@@ -722,20 +881,24 @@ class MainWindow(QMainWindow):
             if success:
                 self.status_bar.showMessage(msg, 5000)
             else:
-                self.status_bar.showMessage(f"yt-dlp 업데이트 실패: {msg}", 5000)
+                self.status_bar.showMessage(
+                    tr("msg.ytdlp_fail", message=msg), 5000
+                )
         else:
             # 수동 업데이트: 메시지박스로 결과 표시
             if success:
-                QMessageBox.information(self, "yt-dlp 업데이트", msg)
+                QMessageBox.information(self, tr("dlg.ytdlp_update_title"), msg)
             else:
-                QMessageBox.warning(self, "yt-dlp 업데이트 실패", msg)
-            self.status_bar.showMessage("준비")
+                QMessageBox.warning(
+                    self, tr("dlg.ytdlp_update_fail_title"), msg
+                )
+            self.status_bar.showMessage(tr("msg.ready"))
 
     def _show_about(self):
         QMessageBox.about(
-            self, "Stock Video Automator",
-            "Stock Video Automator v1.0\n\n"
-            "PyQt6 + yt-dlp 기반 비디오 다운로더\n"
+            self, tr("app.title"),
+            f"{tr('app.title')} v{__version__}\n\n"
+            f"{tr('dlg.about_body')}"
         )
 
     def resizeEvent(self, event):
@@ -753,17 +916,19 @@ class MainWindow(QMainWindow):
             self.hide()
             if self.tray_icon.isVisible():
                 self.tray_icon.showMessage(
-                    "Stock Video Automator",
-                    "백그라운드에서 실행 중입니다.",
+                    tr("app.title"),
+                    tr("msg.background_running"),
                     QSystemTrayIcon.MessageIcon.Information, 2000,
                 )
             return
 
-        # Actually quit: stop bridge server and cancel all running downloads
+        # Actually quit: persist active downloads, stop bridge, cancel workers
+        self._persist_active_downloads()
         if hasattr(self, '_bridge_server'):
             self._bridge_server.stop()
         for worker in self._workers.values():
-            worker.cancel()
-            worker.wait(2000)
+            if hasattr(worker, 'cancel'):
+                worker.cancel()
+                worker.wait(2000)
         self.tray_icon.hide()
         event.accept()

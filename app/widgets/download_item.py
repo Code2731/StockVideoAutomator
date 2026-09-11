@@ -1,24 +1,26 @@
 import os
 import subprocess
 import sys
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QProgressBar, QPushButton,
-    QSizePolicy,
+    QSizePolicy, QMenu,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QUrl
-from PyQt6.QtGui import QPixmap, QDesktopServices, QMouseEvent
+from PySide6.QtCore import Qt, Signal, QSize, QUrl
+from PySide6.QtGui import QPixmap, QDesktopServices, QMouseEvent
 import requests
 
 from app.models.video_info import VideoInfo
 from app.utils.helpers import format_duration, format_file_size, format_speed
+from app.utils.i18n import tr
 
 
 class DownloadItemWidget(QWidget):
     """Single download item widget showing thumbnail, info, progress."""
 
-    cancel_requested = pyqtSignal(str)  # video_id
-    remove_requested = pyqtSignal(str)  # video_id
-    clicked = pyqtSignal(str)  # video_id — for selection management
+    cancel_requested = Signal(str)  # video_id
+    remove_requested = Signal(str)  # video_id
+    format_requested = Signal(str)  # video_id — 형식 선택 요청
+    clicked = Signal(str)  # video_id — for selection management
 
     def __init__(self, video_info: VideoInfo, parent=None):
         super().__init__(parent)
@@ -30,16 +32,16 @@ class DownloadItemWidget(QWidget):
     def _setup_ui(self):
         self.setObjectName("downloadItem")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setMinimumHeight(70)
-        self.setMaximumHeight(80)
+        self.setMinimumHeight(90)
+        self.setMaximumHeight(100)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(16)
 
         # Thumbnail
         self.lbl_thumbnail = QLabel()
-        self.lbl_thumbnail.setFixedSize(QSize(100, 56))
+        self.lbl_thumbnail.setFixedSize(QSize(120, 68))
         self.lbl_thumbnail.setObjectName("thumbnail")
         self.lbl_thumbnail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_thumbnail.setScaledContents(True)
@@ -50,6 +52,7 @@ class DownloadItemWidget(QWidget):
         info_layout = QVBoxLayout()
         info_layout.setSpacing(4)
 
+        title_row = QHBoxLayout()
         self.lbl_title = QLabel(self.video_info.title)
         self.lbl_title.setObjectName("itemTitle")
         self.lbl_title.setWordWrap(False)
@@ -57,9 +60,18 @@ class DownloadItemWidget(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
         self.lbl_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        info_layout.addWidget(self.lbl_title)
+        title_row.addWidget(self.lbl_title)
 
-        # Meta info: duration · size · format · resolution · fps · channel
+        # Status Badge
+        self.lbl_status_badge = QLabel(tr("status.waiting"))
+        self.lbl_status_badge.setObjectName("statusBadge")
+        self.lbl_status_badge.setProperty("status", "waiting")
+        self.lbl_status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_status_badge.setFixedWidth(70)
+        title_row.addWidget(self.lbl_status_badge)
+        info_layout.addLayout(title_row)
+
+        # Meta info
         meta_parts = []
         if self.video_info.duration:
             meta_parts.append(format_duration(self.video_info.duration))
@@ -67,10 +79,6 @@ class DownloadItemWidget(QWidget):
             meta_parts.append(format_file_size(self.video_info.filesize_approx))
         if self.video_info.ext:
             meta_parts.append(self.video_info.ext.upper())
-        if self.video_info.resolution:
-            meta_parts.append(self.video_info.resolution)
-        if self.video_info.fps:
-            meta_parts.append(f"{self.video_info.fps}fps")
         if self.video_info.channel:
             meta_parts.append(self.video_info.channel)
 
@@ -80,10 +88,9 @@ class DownloadItemWidget(QWidget):
         self.lbl_meta.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         info_layout.addWidget(self.lbl_meta)
 
-        # Progress bar (hidden by default)
+        # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setObjectName("itemProgress")
-        self.progress_bar.setMaximumHeight(14)
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setVisible(False)
         self.progress_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -91,31 +98,39 @@ class DownloadItemWidget(QWidget):
 
         layout.addLayout(info_layout, stretch=1)
 
-        # Status / Speed label
-        self.lbl_status = QLabel("대기중")
-        self.lbl_status.setObjectName("itemStatus")
-        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_status.setMinimumWidth(100)
-        self.lbl_status.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        layout.addWidget(self.lbl_status)
+        # Speed label
+        self.lbl_speed = QLabel("")
+        self.lbl_speed.setObjectName("itemMeta")
+        self.lbl_speed.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_speed.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self.lbl_speed)
 
-        # Open folder button
+        # Buttons
         self.btn_folder = QPushButton("📂")
         self.btn_folder.setObjectName("itemFolderButton")
-        self.btn_folder.setFixedSize(28, 28)
+        self.btn_folder.setFixedSize(32, 32)
         self.btn_folder.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_folder.setToolTip("저장 폴더 열기")
         self.btn_folder.clicked.connect(self._on_open_folder)
         self.btn_folder.setVisible(False)
         layout.addWidget(self.btn_folder)
 
-        # Cancel / Remove button
         self.btn_action = QPushButton("✕")
         self.btn_action.setObjectName("itemActionButton")
-        self.btn_action.setFixedSize(28, 28)
+        self.btn_action.setFixedSize(32, 32)
         self.btn_action.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_action.clicked.connect(self._on_action)
         layout.addWidget(self.btn_action)
+
+    def _update_status_badge(self, status: str, text: str = ""):
+        self.lbl_status_badge.setProperty("status", status)
+        self.lbl_status_badge.setText(text if text else self._get_status_text(status))
+        self.lbl_status_badge.style().unpolish(self.lbl_status_badge)
+        self.lbl_status_badge.style().polish(self.lbl_status_badge)
+
+    def _get_status_text(self, status: str) -> str:
+        key = f"status.{status}"
+        text = tr(key)
+        return status if text == key else text
 
     def _load_thumbnail(self):
         if not self.video_info.thumbnail_url:
@@ -128,7 +143,7 @@ class DownloadItemWidget(QWidget):
                 pixmap.loadFromData(resp.content)
                 self.lbl_thumbnail.setPixmap(
                     pixmap.scaled(
-                        100, 56,
+                        120, 68,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
@@ -144,21 +159,21 @@ class DownloadItemWidget(QWidget):
             speed = data.get("speed", 0)
             self.progress_bar.setVisible(True)
             self.progress_bar.setValue(int(pct))
-            self.lbl_status.setText(format_speed(speed))
+            self.lbl_speed.setText(format_speed(speed))
+            self._update_status_badge("downloading")
             self.video_info.status = "downloading"
-            self.video_info.progress = pct
-            self.video_info.speed = speed
 
         elif status == "processing":
             self.progress_bar.setValue(100)
-            self.lbl_status.setText("변환 중...")
+            self.lbl_speed.setText("")
+            self._update_status_badge("processing")
 
     def set_completed(self, file_path: str):
         self.video_info.status = "completed"
         self.video_info.downloaded_path = file_path
         self.progress_bar.setVisible(False)
-        self.lbl_status.setText("완료")
-        self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        self.lbl_speed.setText("")
+        self._update_status_badge("completed")
         self.btn_action.setText("✕")
         self.btn_folder.setVisible(True)
 
@@ -166,8 +181,8 @@ class DownloadItemWidget(QWidget):
         self.video_info.status = "error"
         self.video_info.error_message = msg
         self.progress_bar.setVisible(False)
-        self.lbl_status.setText("오류")
-        self.lbl_status.setStyleSheet("color: #f44336; font-weight: bold;")
+        self.lbl_speed.setText("")
+        self._update_status_badge("error")
 
     # -- Selection -----------------------------------------------------------
 
@@ -213,3 +228,32 @@ class DownloadItemWidget(QWidget):
             self.cancel_requested.emit(self.video_info.video_id)
         else:
             self.remove_requested.emit(self.video_info.video_id)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+
+        act_format = menu.addAction("형식 선택...")
+        act_format.setEnabled(self.video_info.status != "downloading")
+        act_format.triggered.connect(
+            lambda: self.format_requested.emit(self.video_info.video_id)
+        )
+
+        if (self.video_info.status == "completed"
+                and self.video_info.downloaded_path):
+            act_open = menu.addAction("파일 열기")
+            act_open.triggered.connect(self._on_open_file)
+            act_folder = menu.addAction("폴더 열기")
+            act_folder.triggered.connect(self._on_open_folder)
+
+        menu.addSeparator()
+        act_remove = menu.addAction("목록에서 제거")
+        act_remove.triggered.connect(
+            lambda: self.remove_requested.emit(self.video_info.video_id)
+        )
+
+        menu.exec(event.globalPos())
+
+    def _on_open_file(self):
+        path = self.video_info.downloaded_path
+        if path and os.path.isfile(path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))

@@ -1,22 +1,23 @@
 import os
 from typing import List
-from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMenu,
+from PySide6.QtWidgets import (
+    QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QFileDialog, QMenu,
 )
-from PyQt6.QtCore import pyqtSignal, Qt
-from PyQt6.QtGui import QAction, QIcon
+from PySide6.QtCore import Signal, Qt
+from PySide6.QtGui import QAction, QIcon
 
 from app.utils.settings_manager import SettingsManager
+from app.utils.i18n import tr
 
 
 class ToolBar(QWidget):
     """Top toolbar with paste button, format/quality selectors, save path."""
 
-    paste_clicked = pyqtSignal()
-    download_type_changed = pyqtSignal(str)   # "video" or "audio"
-    quality_changed = pyqtSignal(str)
-    format_changed = pyqtSignal(str)
-    save_path_changed = pyqtSignal(str)
+    paste_clicked = Signal()
+    download_type_changed = Signal(str)   # "video" or "audio"
+    quality_changed = Signal(str)
+    format_changed = Signal(str)
+    save_path_changed = Signal(str)
 
     VIDEO_QUALITIES = [
         ("최고", "best"), ("UHD 8K", "4320p"), ("HD 4K", "2160p"),
@@ -53,72 +54,96 @@ class ToolBar(QWidget):
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(12)
 
         # Paste link button
-        self.btn_paste = QPushButton("  링크 붙여넣기")
+        self.btn_paste = QPushButton(tr("toolbar.paste"))
         self.btn_paste.setObjectName("pasteButton")
         self.btn_paste.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_paste.setMinimumHeight(36)
+        self.btn_paste.setMinimumHeight(40)
         layout.addWidget(self.btn_paste)
 
-        layout.addSpacing(8)
+        layout.addSpacing(12)
 
-        # Download type menu button (replaces QComboBox)
-        lbl_type = QLabel("다운로드")
-        lbl_type.setObjectName("toolbarLabel")
-        layout.addWidget(lbl_type)
+        # Download type
+        type_vbox = QVBoxLayout()
+        self.lbl_type = QLabel(tr("toolbar.download"))
+        self.lbl_type.setObjectName("toolbarLabel")
+        type_vbox.addWidget(self.lbl_type)
 
-        type_label = "비디오" if self._download_type == "video" else "오디오"
-        self.btn_download_type = QPushButton(f"{type_label}  ▾")
+        self.btn_download_type = QPushButton(self._type_button_text())
         self.btn_download_type.setObjectName("downloadTypeButton")
         self.btn_download_type.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_download_type.setMinimumHeight(32)
-        self.btn_download_type.setMinimumWidth(130)
+        self.btn_download_type.setMinimumHeight(36)
+        self.btn_download_type.setMinimumWidth(140)
         self._build_type_menu()
-        layout.addWidget(self.btn_download_type)
+        type_vbox.addWidget(self.btn_download_type)
+        layout.addLayout(type_vbox)
 
-        # Quality menu button
-        lbl_quality = QLabel("화질")
-        lbl_quality.setObjectName("toolbarLabel")
-        layout.addWidget(lbl_quality)
+        # Quality
+        quality_vbox = QVBoxLayout()
+        self.lbl_quality = QLabel(tr("toolbar.quality"))
+        self.lbl_quality.setObjectName("toolbarLabel")
+        quality_vbox.addWidget(self.lbl_quality)
 
-        self.btn_quality = QPushButton(f"{self._quality_label}  ▾")
+        self.btn_quality = QPushButton(f"💎 {self._quality_label}  ▾")
         self.btn_quality.setObjectName("qualityButton")
         self.btn_quality.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_quality.setMinimumHeight(32)
-        self.btn_quality.setMinimumWidth(100)
+        self.btn_quality.setMinimumHeight(36)
+        self.btn_quality.setMinimumWidth(120)
         self.btn_quality.setEnabled(self._download_type == "video")
         self._build_quality_menu()
-        layout.addWidget(self.btn_quality)
+        quality_vbox.addWidget(self.btn_quality)
+        layout.addLayout(quality_vbox)
 
-        # Format menu button
-        lbl_format = QLabel("포맷")
-        lbl_format.setObjectName("toolbarLabel")
-        layout.addWidget(lbl_format)
+        # Format
+        format_vbox = QVBoxLayout()
+        self.lbl_format = QLabel(tr("toolbar.format"))
+        self.lbl_format.setObjectName("toolbarLabel")
+        format_vbox.addWidget(self.lbl_format)
 
-        self.btn_format = QPushButton(f"{self._format_label}  ▾")
+        self.btn_format = QPushButton(f"📦 {self._format_label}  ▾")
         self.btn_format.setObjectName("formatButton")
         self.btn_format.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_format.setMinimumHeight(32)
-        self.btn_format.setMinimumWidth(90)
+        self.btn_format.setMinimumHeight(36)
+        self.btn_format.setMinimumWidth(100)
         self._build_format_menu()
-        layout.addWidget(self.btn_format)
+        format_vbox.addWidget(self.btn_format)
+        layout.addLayout(format_vbox)
 
-        # Save path menu button
-        lbl_save = QLabel("저장하여")
-        lbl_save.setObjectName("toolbarLabel")
-        layout.addWidget(lbl_save)
+        # Save path
+        path_vbox = QVBoxLayout()
+        self.lbl_save = QLabel(tr("toolbar.save_location"))
+        self.lbl_save.setObjectName("toolbarLabel")
+        path_vbox.addWidget(self.lbl_save)
 
-        self.btn_save_path = QPushButton(self._get_display_path() + "  ▾")
+        self.btn_save_path = QPushButton(f"📂 {self._get_display_path()}  ▾")
         self.btn_save_path.setObjectName("savePathButton")
         self.btn_save_path.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_save_path.setMinimumHeight(32)
+        self.btn_save_path.setMinimumHeight(36)
         self._build_save_path_menu()
-        layout.addWidget(self.btn_save_path)
+        path_vbox.addWidget(self.btn_save_path)
+        layout.addLayout(path_vbox)
 
         layout.addStretch()
+
+    def _type_button_text(self) -> str:
+        label = tr("toolbar.video") if self._download_type == "video" else tr("toolbar.audio")
+        return f"{label}  ▾"
+
+    def retranslate(self):
+        """언어 변경 시 툴바 텍스트를 갱신한다."""
+        self.btn_paste.setText(tr("toolbar.paste"))
+        self.lbl_type.setText(tr("toolbar.download"))
+        self.lbl_quality.setText(tr("toolbar.quality"))
+        self.lbl_format.setText(tr("toolbar.format"))
+        self.lbl_save.setText(tr("toolbar.save_location"))
+        self.btn_download_type.setText(self._type_button_text())
+        self._build_type_menu()
+        self._build_quality_menu()
+        self._build_format_menu()
+        self._build_save_path_menu()
 
     def _build_type_menu(self):
         """Build the download type dropdown menu."""
@@ -126,14 +151,14 @@ class ToolBar(QWidget):
         menu.setObjectName("downloadTypeMenu")
 
         # 비디오
-        self.act_video = QAction("비디오", self)
+        self.act_video = QAction(tr("toolbar.video_plain"), self)
         self.act_video.setCheckable(True)
         self.act_video.setChecked(self._download_type == "video")
         self.act_video.triggered.connect(lambda: self._set_download_type("video"))
         menu.addAction(self.act_video)
 
         # 오디오
-        self.act_audio = QAction("오디오", self)
+        self.act_audio = QAction(tr("toolbar.audio_plain"), self)
         self.act_audio.setCheckable(True)
         self.act_audio.setChecked(self._download_type == "audio")
         self.act_audio.triggered.connect(lambda: self._set_download_type("audio"))
@@ -142,10 +167,10 @@ class ToolBar(QWidget):
         menu.addSeparator()
 
         # 자막 서브메뉴
-        self.subtitle_menu = QMenu("자막", self)
+        self.subtitle_menu = QMenu(tr("toolbar.subtitle"), self)
         self.subtitle_menu.setObjectName("downloadTypeMenu")
 
-        self.act_subtitle_off = QAction("사용 안 함", self)
+        self.act_subtitle_off = QAction(tr("toolbar.subtitle_off"), self)
         self.act_subtitle_off.setCheckable(True)
         self.act_subtitle_off.setChecked(not self._subtitle_enabled)
         self.act_subtitle_off.triggered.connect(lambda: self._set_subtitle(False, ""))
@@ -165,16 +190,16 @@ class ToolBar(QWidget):
         menu.addMenu(self.subtitle_menu)
 
         # 오디오 트랙 서브메뉴
-        self.audio_track_menu = QMenu("오디오 트랙", self)
+        self.audio_track_menu = QMenu(tr("toolbar.audio_track"), self)
         self.audio_track_menu.setObjectName("downloadTypeMenu")
 
-        self.act_track_default = QAction("기본", self)
+        self.act_track_default = QAction(tr("toolbar.track_default"), self)
         self.act_track_default.setCheckable(True)
         self.act_track_default.setChecked(self._audio_track == "기본")
         self.act_track_default.triggered.connect(lambda: self._set_audio_track("기본"))
         self.audio_track_menu.addAction(self.act_track_default)
 
-        self.act_track_all = QAction("모든 트랙", self)
+        self.act_track_all = QAction(tr("toolbar.track_all"), self)
         self.act_track_all.setCheckable(True)
         self.act_track_all.setChecked(self._audio_track == "모든 트랙")
         self.act_track_all.triggered.connect(lambda: self._set_audio_track("모든 트랙"))
@@ -204,7 +229,7 @@ class ToolBar(QWidget):
         menu.addSeparator()
 
         # 프레임 속도 서브메뉴
-        fps_menu = QMenu("프레임 속도", self)
+        fps_menu = QMenu(tr("toolbar.frame_rate"), self)
         fps_menu.setObjectName("downloadTypeMenu")
         self._fps_actions = []  # type: List[QAction]
         for fps in self.FRAME_RATES:
@@ -217,7 +242,7 @@ class ToolBar(QWidget):
         menu.addMenu(fps_menu)
 
         # 코덱 서브메뉴
-        codec_menu = QMenu("코덱", self)
+        codec_menu = QMenu(tr("toolbar.codec"), self)
         codec_menu.setObjectName("downloadTypeMenu")
         self._codec_actions = []  # type: List[QAction]
         for codec in self.CODECS:
@@ -230,7 +255,7 @@ class ToolBar(QWidget):
         menu.addMenu(codec_menu)
 
         # VR 서브메뉴
-        vr_menu = QMenu("VR", self)
+        vr_menu = QMenu(tr("toolbar.vr"), self)
         vr_menu.setObjectName("downloadTypeMenu")
         self._vr_actions = []  # type: List[QAction]
         for vr in self.VR_OPTIONS:
@@ -247,7 +272,7 @@ class ToolBar(QWidget):
     def _set_quality(self, label: str, value: str):
         self._quality = value
         self._quality_label = label
-        self.btn_quality.setText(f"{label}  ▾")
+        self.btn_quality.setText(f"💎 {label}  ▾")
         for act in self._quality_actions:
             act.setChecked(act.text() == label)
         self._settings.toolbar_quality = value
@@ -313,7 +338,7 @@ class ToolBar(QWidget):
             self._format = fmt.lower()
             self._format_label = fmt
 
-        self.btn_format.setText(f"{self._format_label}  ▾")
+        self.btn_format.setText(f"📦 {self._format_label}  ▾")
 
         for act in self._format_actions:
             act.setChecked(act.text() == fmt)
@@ -335,7 +360,7 @@ class ToolBar(QWidget):
         fmt, label = preset_map.get(platform, ("mp4", "MP4"))
         self._format = fmt
         self._format_label = label
-        self.btn_format.setText(f"{label}  ▾")
+        self.btn_format.setText(f"📦 {label}  ▾")
 
         for act in self._format_actions:
             act.setChecked(act.text() == label)
@@ -376,7 +401,7 @@ class ToolBar(QWidget):
 
         menu.addSeparator()
 
-        act_browse = QAction("탐색...", self)
+        act_browse = QAction(tr("toolbar.browse"), self)
         act_browse.triggered.connect(self._select_save_path)
         menu.addAction(act_browse)
 
@@ -385,7 +410,7 @@ class ToolBar(QWidget):
     def _set_save_path(self, path: str, label: str):
         os.makedirs(path, exist_ok=True)
         self._save_path = path
-        self.btn_save_path.setText(f"{label}  ▾")
+        self.btn_save_path.setText(f"📂 {label}  ▾")
 
         for act in self._path_actions:
             act.setChecked(act.text() == label)
@@ -401,8 +426,7 @@ class ToolBar(QWidget):
         self.act_audio.setChecked(not is_video)
 
         # Update button text
-        label = "비디오" if is_video else "오디오"
-        self.btn_download_type.setText(f"{label}  ▾")
+        self.btn_download_type.setText(self._type_button_text())
 
         # Update format menu and quality button
         if is_video:
@@ -413,7 +437,7 @@ class ToolBar(QWidget):
             self._format = "mp3"
             self._format_label = "MP3"
             self.btn_quality.setEnabled(False)
-        self.btn_format.setText(f"{self._format_label}  ▾")
+        self.btn_format.setText(f"📦 {self._format_label}  ▾")
         self._rebuild_format_menu()
 
         self._settings.toolbar_download_type = self._download_type
@@ -452,7 +476,7 @@ class ToolBar(QWidget):
         if path:
             self._save_path = path
             display = self._get_display_path()
-            self.btn_save_path.setText(f"{display}  ▾")
+            self.btn_save_path.setText(f"📂 {display}  ▾")
 
             # Update check marks - check if it matches a preset
             norm_path = os.path.normpath(path)

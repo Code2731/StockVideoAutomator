@@ -8,9 +8,12 @@ import json
 import traceback
 from typing import Any, Dict, Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QMetaObject, Qt, Q_ARG
-from PyQt6.QtNetwork import QTcpServer, QTcpSocket, QHostAddress
+from PySide6.QtCore import QObject, Signal, Slot, QMetaObject, Qt, Q_ARG
+from PySide6.QtNetwork import QTcpServer, QTcpSocket, QHostAddress
 
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 BRIDGE_PORT = 19384
 
@@ -26,12 +29,12 @@ class BridgeServer(QObject):
         self._buffers: dict[QTcpSocket, bytes] = {}
 
     def start(self) -> bool:
-        ok = self._server.listen(QHostAddress.SpecialAddress.LocalHost, BRIDGE_PORT)
+        ok = self._server.listen(QHostAddress.LocalHost, BRIDGE_PORT)
         if ok:
             self._server.newConnection.connect(self._on_new_connection)
-            print(f"[BridgeServer] Listening on localhost:{BRIDGE_PORT}")
+            logger.info("MCP 브리지 서버 시작: localhost:%s", BRIDGE_PORT)
         else:
-            print(f"[BridgeServer] Failed to listen: {self._server.errorString()}")
+            logger.error("MCP 브리지 서버 시작 실패: %s", self._server.errorString())
         return ok
 
     def stop(self):
@@ -77,6 +80,7 @@ class BridgeServer(QObject):
             result = self._dispatch(method, params)
             self._send_result(sock, req_id, result)
         except Exception as e:
+            logger.warning("브리지 요청 처리 실패 (method=%s): %s", method, e)
             self._send_error(sock, req_id, -1, str(e))
 
     def _send_result(self, sock: QTcpSocket, req_id, result):

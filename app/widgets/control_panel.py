@@ -1,15 +1,17 @@
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QMouseEvent
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Signal, QSize
+from PySide6.QtGui import QFont, QMouseEvent
+
+from app.utils.i18n import tr
 
 
 class ControlPanelOverlay(QWidget):
     """Transparent overlay behind the control panel. Clicking it closes the panel."""
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -25,7 +27,7 @@ class ControlPanelOverlay(QWidget):
 class ControlPanelItem(QWidget):
     """Single clickable menu item in the control panel."""
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, icon_text: str, label: str, parent=None):
         super().__init__(parent)
@@ -44,10 +46,13 @@ class ControlPanelItem(QWidget):
         lbl_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(lbl_icon)
 
-        lbl_text = QLabel(label)
-        lbl_text.setObjectName("cpItemText")
-        lbl_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        layout.addWidget(lbl_text, stretch=1)
+        self.lbl_text = QLabel(label)
+        self.lbl_text.setObjectName("cpItemText")
+        self.lbl_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self.lbl_text, stretch=1)
+
+    def set_text(self, text: str):
+        self.lbl_text.setText(text)
 
     def mousePressEvent(self, event):
         self.clicked.emit()
@@ -57,12 +62,12 @@ class ControlPanelItem(QWidget):
 class ControlPanel(QWidget):
     """Right-side sliding control panel (4K Video Downloader+ style)."""
 
-    preferences_requested = pyqtSignal()
-    login_requested = pyqtSignal()
-    liked_download_requested = pyqtSignal()
-    watch_later_requested = pyqtSignal()
-    license_requested = pyqtSignal()
-    support_requested = pyqtSignal()
+    preferences_requested = Signal()
+    login_requested = Signal()
+    liked_download_requested = Signal()
+    watch_later_requested = Signal()
+    license_requested = Signal()
+    support_requested = Signal()
 
     PANEL_WIDTH = 320
 
@@ -92,13 +97,13 @@ class ControlPanel(QWidget):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(16, 0, 8, 0)
 
-        lbl_title = QLabel("제어판")
-        lbl_title.setObjectName("cpTitle")
-        font = lbl_title.font()
+        self.lbl_title = QLabel(tr("cp.title"))
+        self.lbl_title.setObjectName("cpTitle")
+        font = self.lbl_title.font()
         font.setPointSize(13)
         font.setBold(True)
-        lbl_title.setFont(font)
-        header_layout.addWidget(lbl_title)
+        self.lbl_title.setFont(font)
+        header_layout.addWidget(self.lbl_title)
 
         header_layout.addStretch()
 
@@ -138,25 +143,25 @@ class ControlPanel(QWidget):
         login_layout.setContentsMargins(16, 12, 16, 12)
         login_layout.setSpacing(8)
 
-        yt_label = QLabel("YouTube")
-        yt_label.setObjectName("cpYoutubeLabel")
-        yt_font = yt_label.font()
+        self.yt_label = QLabel(tr("cp.youtube"))
+        self.yt_label.setObjectName("cpYoutubeLabel")
+        yt_font = self.yt_label.font()
         yt_font.setPointSize(14)
         yt_font.setBold(True)
-        yt_label.setFont(yt_font)
-        login_layout.addWidget(yt_label)
+        self.yt_label.setFont(yt_font)
+        login_layout.addWidget(self.yt_label)
 
-        login_desc = QLabel("YouTube 계정으로 로그인하여\n개인 재생목록에 접근하세요.")
-        login_desc.setObjectName("cpLoginDesc")
-        login_desc.setWordWrap(True)
-        login_layout.addWidget(login_desc)
+        self.login_desc = QLabel(tr("cp.login_desc"))
+        self.login_desc.setObjectName("cpLoginDesc")
+        self.login_desc.setWordWrap(True)
+        login_layout.addWidget(self.login_desc)
 
-        btn_login = QPushButton("로그인")
-        btn_login.setObjectName("cpLoginButton")
-        btn_login.setFixedHeight(36)
-        btn_login.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_login.clicked.connect(self.login_requested.emit)
-        login_layout.addWidget(btn_login)
+        self.btn_login = QPushButton(tr("cp.login"))
+        self.btn_login.setObjectName("cpLoginButton")
+        self.btn_login.setFixedHeight(36)
+        self.btn_login.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_login.clicked.connect(self.login_requested.emit)
+        login_layout.addWidget(self.btn_login)
 
         content_layout.addWidget(login_section)
 
@@ -167,25 +172,25 @@ class ControlPanel(QWidget):
         content_layout.addWidget(sep2)
 
         # ── Menu items ───────────────────────────────
-        item_prefs = ControlPanelItem("⚙", "환경설정")
-        item_prefs.clicked.connect(self.preferences_requested.emit)
-        content_layout.addWidget(item_prefs)
+        self.item_prefs = ControlPanelItem("⚙", tr("cp.preferences"))
+        self.item_prefs.clicked.connect(self.preferences_requested.emit)
+        content_layout.addWidget(self.item_prefs)
 
-        item_liked = ControlPanelItem("👍", '"좋아요 표시" 다운로드')
-        item_liked.clicked.connect(self.liked_download_requested.emit)
-        content_layout.addWidget(item_liked)
+        self.item_liked = ControlPanelItem("👍", tr("cp.liked_download"))
+        self.item_liked.clicked.connect(self.liked_download_requested.emit)
+        content_layout.addWidget(self.item_liked)
 
-        item_watch = ControlPanelItem("🕐", '"나중에 볼" 다운로드')
-        item_watch.clicked.connect(self.watch_later_requested.emit)
-        content_layout.addWidget(item_watch)
+        self.item_watch = ControlPanelItem("🕐", tr("cp.watch_later_download"))
+        self.item_watch.clicked.connect(self.watch_later_requested.emit)
+        content_layout.addWidget(self.item_watch)
 
-        item_license = ControlPanelItem("🔑", "활성화")
-        item_license.clicked.connect(self.license_requested.emit)
-        content_layout.addWidget(item_license)
+        self.item_license = ControlPanelItem("🔑", tr("cp.activate"))
+        self.item_license.clicked.connect(self.license_requested.emit)
+        content_layout.addWidget(self.item_license)
 
-        item_support = ControlPanelItem("💬", "지원 받기")
-        item_support.clicked.connect(self.support_requested.emit)
-        content_layout.addWidget(item_support)
+        self.item_support = ControlPanelItem("💬", tr("cp.support"))
+        self.item_support.clicked.connect(self.support_requested.emit)
+        content_layout.addWidget(self.item_support)
 
         # ── Separator ────────────────────────────────
         sep3 = QFrame()
@@ -200,18 +205,18 @@ class ControlPanel(QWidget):
         news_layout.setContentsMargins(16, 12, 16, 12)
         news_layout.setSpacing(8)
 
-        news_title = QLabel("뉴스")
-        news_title.setObjectName("cpNewsTitle")
-        nf = news_title.font()
+        self.news_title = QLabel(tr("cp.news"))
+        self.news_title.setObjectName("cpNewsTitle")
+        nf = self.news_title.font()
         nf.setPointSize(12)
         nf.setBold(True)
-        news_title.setFont(nf)
-        news_layout.addWidget(news_title)
+        self.news_title.setFont(nf)
+        news_layout.addWidget(self.news_title)
 
-        news_body = QLabel("새로운 소식이 없습니다.")
-        news_body.setObjectName("cpNewsBody")
-        news_body.setWordWrap(True)
-        news_layout.addWidget(news_body)
+        self.news_body = QLabel(tr("cp.no_news"))
+        self.news_body.setObjectName("cpNewsBody")
+        self.news_body.setWordWrap(True)
+        news_layout.addWidget(self.news_body)
 
         content_layout.addWidget(news_section)
 
@@ -228,15 +233,15 @@ class ControlPanel(QWidget):
         notif_layout.setContentsMargins(16, 12, 16, 12)
         notif_layout.setSpacing(8)
 
-        notif_title = QLabel("다운로드 알림")
-        notif_title.setObjectName("cpNotifTitle")
-        ntf = notif_title.font()
+        self.notif_title = QLabel(tr("cp.download_notifications"))
+        self.notif_title.setObjectName("cpNotifTitle")
+        ntf = self.notif_title.font()
         ntf.setPointSize(12)
         ntf.setBold(True)
-        notif_title.setFont(ntf)
-        notif_layout.addWidget(notif_title)
+        self.notif_title.setFont(ntf)
+        notif_layout.addWidget(self.notif_title)
 
-        self.lbl_notif_body = QLabel("완료된 다운로드가 없습니다.")
+        self.lbl_notif_body = QLabel(tr("cp.no_notifications"))
         self.lbl_notif_body.setObjectName("cpNotifBody")
         self.lbl_notif_body.setWordWrap(True)
         notif_layout.addWidget(self.lbl_notif_body)
@@ -311,6 +316,22 @@ class ControlPanel(QWidget):
 
     def update_notification(self, title: str, message: str):
         self.lbl_notif_body.setText(f"{title}\n{message}")
+
+    def retranslate(self):
+        """언어 변경 시 제어판 텍스트를 갱신한다."""
+        self.lbl_title.setText(tr("cp.title"))
+        self.yt_label.setText(tr("cp.youtube"))
+        self.login_desc.setText(tr("cp.login_desc"))
+        self.btn_login.setText(tr("cp.login"))
+        self.item_prefs.set_text(tr("cp.preferences"))
+        self.item_liked.set_text(tr("cp.liked_download"))
+        self.item_watch.set_text(tr("cp.watch_later_download"))
+        self.item_license.set_text(tr("cp.activate"))
+        self.item_support.set_text(tr("cp.support"))
+        self.news_title.setText(tr("cp.news"))
+        self.news_body.setText(tr("cp.no_news"))
+        self.notif_title.setText(tr("cp.download_notifications"))
+        self.lbl_notif_body.setText(tr("cp.no_notifications"))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

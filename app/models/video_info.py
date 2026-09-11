@@ -27,6 +27,7 @@ class VideoInfo:
 
     # Internal
     added_index: int = 0  # 추가 순서 (정렬용)
+    options: dict = field(default_factory=dict)  # 다운로드 시 사용한 옵션
 
     # Download state
     status: str = "pending"  # pending, downloading, completed, error, cancelled

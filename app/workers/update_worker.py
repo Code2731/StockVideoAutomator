@@ -1,25 +1,25 @@
 import subprocess
 import sys
-from PyQt6.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 
 def _is_frozen() -> bool:
-    """PyInstaller 빌드 환경인지 확인."""
-    return getattr(sys, 'frozen', False)
+    """패키징된 앱 환경인지 확인한다."""
+    return bool(getattr(sys, "frozen", False) or "__compiled__" in globals())
 
 
 class YtDlpUpdateWorker(QThread):
     """Worker thread to check/update yt-dlp via pip."""
 
-    status_message = pyqtSignal(str)   # status text
-    finished = pyqtSignal(bool, str)   # success, message
+    status_message = Signal(str)   # status text
+    finished = Signal(bool, str)   # success, message
 
     def __init__(self, python_path: str = "", parent=None):
         super().__init__(parent)
         self._python = python_path or sys.executable
 
     def run(self):
-        # PyInstaller 빌드에서는 pip 업데이트 불가
+        # 패키징된 앱에서는 pip 업데이트 불가
         if _is_frozen():
             self.finished.emit(True, "yt-dlp가 최신 버전입니다.")
             return

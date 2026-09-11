@@ -1,16 +1,17 @@
-from PyQt6.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from app.models.video_info import VideoInfo
 from app.utils.helpers import is_playlist_url
+from app.utils.settings_manager import SettingsManager
 
 
 class InfoWorker(QThread):
     """Worker thread to fetch video/playlist info using yt-dlp."""
 
-    info_ready = pyqtSignal(VideoInfo)
-    playlist_ready = pyqtSignal(list)  # list[VideoInfo]
-    error = pyqtSignal(str)
-    status_message = pyqtSignal(str)
+    info_ready = Signal(VideoInfo)
+    playlist_ready = Signal(list)  # list[VideoInfo]
+    error = Signal(str)
+    status_message = Signal(str)
 
     def __init__(self, url: str, parent=None):
         super().__init__(parent)
@@ -21,16 +22,7 @@ class InfoWorker(QThread):
         self._yt_dlp = yt_dlp
 
         try:
-            ydl_opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "extract_flat": False,
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": ["android", "web"],
-                    }
-                },
-            }
+            ydl_opts = self._build_ydl_opts()
 
             if is_playlist_url(self.url):
                 self._fetch_playlist(ydl_opts)
@@ -39,6 +31,29 @@ class InfoWorker(QThread):
 
         except Exception as e:
             self.error.emit(f"정보를 가져오는 중 오류 발생: {str(e)}")
+
+    def _build_ydl_opts(self) -> dict:
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": False,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "web"],
+                }
+            },
+        }
+
+        # 비공개 재생목록/연령 제한 콘텐츠 접근을 위해 쿠키/프록시 적용
+        settings = SettingsManager()
+        browser = settings.get_cookie_browser_name()
+        if browser:
+            ydl_opts["cookiesfrombrowser"] = (browser,)
+        proxy_url = settings.get_proxy_url()
+        if proxy_url:
+            ydl_opts["proxy"] = proxy_url
+
+        return ydl_opts
 
     def _fetch_single(self, ydl_opts: dict):
         self.status_message.emit("영상 정보를 가져오는 중...")
