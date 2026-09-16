@@ -6,8 +6,8 @@ GUI-based YouTube downloader with seamless AI agent integration via Model Contex
 
 최신 버전의 Stock Video Automator를 다운로드하세요. (Nuitka로 컴파일되어 별도의 파이썬 설치 없이 실행 가능합니다.)
 
-- 🍎 **macOS (Apple Silicon / Intel):** [Download StockVideoAutomator.app.zip](https://github.com/namhyunjun/StockVideoAutomator/releases/latest)
-- 🪟 **Windows (64-bit):** [Download StockVideoAutomator.exe](https://github.com/namhyunjun/StockVideoAutomator/releases/latest)
+- 🍎 **macOS (Apple Silicon / Intel):** [Download StockVideoAutomator-macOS.zip](https://github.com/Code2731/StockVideoAutomator/releases/latest)
+- 🪟 **Windows (64-bit):** [Download StockVideoAutomator-Windows.zip](https://github.com/Code2731/StockVideoAutomator/releases/latest)
 
 > **안내:**
 > - macOS에서는 다운로드 후 앱을 우클릭하고 `열기`를 선택하여 실행 권한을 부여해야 할 수 있습니다.
@@ -23,7 +23,11 @@ GUI-based YouTube downloader with seamless AI agent integration via Model Contex
 
 ## 🛠️ How to Build (For Developers)
 
-직접 소스코드를 빌드하여 실행 파일을 만들려면 아래 스크립트를 사용하세요. (Nuitka 필요)
+직접 소스코드를 빌드하여 실행 파일을 만들려면 아래 스크립트를 사용하세요. (Nuitka 사용, 버전은 `app/version.py`에서 자동 반영)
+
+```bash
+python3 -m pip install -r requirements-build.txt
+```
 
 **macOS:**
 ```bash
@@ -34,3 +38,5 @@ GUI-based YouTube downloader with seamless AI agent integration via Model Contex
 ```bat
 build_nuitka.bat
 ```
+
+`v*` 태그를 푸시하면 GitHub Actions(`.github/workflows/build.yml`)가 Windows/macOS 빌드를 자동 생성합니다.

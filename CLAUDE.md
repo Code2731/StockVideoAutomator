@@ -47,10 +47,15 @@ PySide6 + yt-dlp 기반 YouTube 비디오/오디오 다운로더.
 
 ## 빌드
 
+Nuitka로 단일 실행 파일(Windows) 및 앱 번들(macOS)을 생성합니다.
+버전은 `app/version.py`에서 자동으로 읽어옵니다.
+
 ```bash
 # Windows
-python -m PyInstaller StockVideoAutomator.spec --clean -y
+build_nuitka.bat
 
 # macOS
-python3 -m PyInstaller StockVideoAutomator-mac.spec --clean -y
+./build_nuitka.sh
 ```
+
+CI: `v*` 태그 푸시 시 `.github/workflows/build.yml`이 Windows/macOS 빌드를 생성합니다.

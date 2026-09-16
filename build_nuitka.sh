@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 # macOS용 Nuitka 빌드 스크립트
+set -euo pipefail
 
-echo "=== Stock Video Automator Nuitka Build (macOS) ==="
+cd "$(dirname "$0")"
+
+VERSION="$(python3 -c "import runpy; print(runpy.run_path('app/version.py')['__version__'])")"
+APP_NAME="Stock Video Automator"
+
+echo "=== Stock Video Automator Nuitka Build (macOS) v${VERSION} ==="
 echo "Building standalone application..."
 
-# 의존성 설치 확인
-python3 -m pip install nuitka PySide6 requests yt-dlp mcp imageio
+python3 -m pip install -r requirements-build.txt
 
-# 빌드 옵션
 python3 -m nuitka \
     --standalone \
     --macos-create-app-bundle \
     --macos-app-icon=app/resources/app_icon.png \
-    --macos-app-name="Stock Video Automator" \
-    --macos-app-version="1.0.0" \
+    --macos-app-name="${APP_NAME}" \
+    --macos-app-version="${VERSION}" \
     --enable-plugin=pyside6 \
     --enable-plugin=anti-bloat \
     --include-data-dir=app/resources=app/resources \
@@ -27,4 +31,4 @@ python3 -m nuitka \
     main.py
 
 echo "=== Build Complete ==="
-echo "결과물은 build/main.app 에 생성되었습니다."
+echo "결과물: build/main.app"
